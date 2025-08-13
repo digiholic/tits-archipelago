@@ -123,6 +123,7 @@ class TitsGameContext(CommonContext):
 
     def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
         super().on_deathlink(data)
+        logger.info("Deathlink trigger received!")
         # We want to send a deathlink trigger regardless of who died
         async_start(self.send_trigger(trigger_ap_deathlink), name="Sending AP-Deathlink")
 
@@ -131,6 +132,9 @@ class TitsGameContext(CommonContext):
             logger.info(f"T.I.T.S. is connected and listening on port {self.titsSocket.port}")
             for name, trigger_id in self.titsTriggers.items():
                 logger.info(f"Found Trigger {name}: {trigger_id}")
+        else:
+            logger.info(f"No active connection to T.I.T.S, ensure the program is running and API is enabled, "+
+                        "then run /tits_connect to attach")
 
     async def connect_to_api(self, port):
         try:
