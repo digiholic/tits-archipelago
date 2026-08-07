@@ -21,6 +21,11 @@ trigger_ap_receive_progression = "AP-Receive-Progression"
 trigger_ap_receive_useful = "AP-Receive-Useful"
 trigger_ap_receive_filler = "AP-Receive-Filler"
 trigger_ap_receive_trap = "AP-Receive-Trap"
+trigger_ap_send = "AP-Send"
+trigger_ap_send_progression = "AP-Send-Progression"
+trigger_ap_send_useful = "AP-Send-Useful"
+trigger_ap_send_filler = "AP-Send-Filler"
+trigger_ap_send_trap = "AP-Send-Trap"
 trigger_ap_goal = "AP-Goal"
 trigger_ap_deathlink = "AP-Deathlink"
 
@@ -52,11 +57,20 @@ class TitsCommandProcessor(ClientCommandProcessor):
         logger.info(f"    - {trigger_ap_receive_useful}:      When receiving a useful item")
         logger.info(f"    - {trigger_ap_receive_filler}:      When receiving a filler item")
         logger.info(f"    - {trigger_ap_receive_trap}:        When receiving a Trap")
+        logger.info(f"    - {trigger_ap_send}:                When sending any item")
+        logger.info(f"    - {trigger_ap_send_progression}:    When sending a Progression item")
+        logger.info(f"    - {trigger_ap_send_useful}:         When sending a useful item")
+        logger.info(f"    - {trigger_ap_send_filler}:         When sending a filler item")
+        logger.info(f"    - {trigger_ap_send_trap}:           When sending a Trap")
         logger.info(f"    - {trigger_ap_goal}:                When completing your goal")
         logger.info(f"    - {trigger_ap_deathlink}:           When receiving a Death")
         logger.info("")
         logger.info(
             "Any triggers that are not set in T.I.T.S. will be skipped. You need only implement the ones you intend to use")
+
+    def _cmd_tits_debug(self):
+        """Toggles Debug Information on or off."""
+        self.ctx.debug = not self.ctx.debug
 
 
 async def main(args):
@@ -93,6 +107,7 @@ class TitsGameContext(CommonContext):
     titsTriggers: typing.Dict[str, str]
     # The ID passed to the API. Only needs to change if you're controlling multiple TITS clients from the same window
     titsAlias = "AP Tits Client"
+    debug = False
 
     def __init__(self, server_address, password):
         super().__init__(server_address, password)
@@ -101,20 +116,43 @@ class TitsGameContext(CommonContext):
     def on_print_json(self, args: dict):
         super(TitsGameContext, self).on_print_json(args)
 
-        # If it's an Item and we're receiving it
-        if args.get("type", "") == "ItemSend" and self.slot_concerns_self(args["receiving"]) \
-                and self.slot_concerns_self(args["item"].player):
-            async_start(self.send_trigger(trigger_ap_receive), name="Sending AP-Receive")
-
-            flags = [part["flags"] for part in args["data"] if "flags" in part]
-            if flags and all(flag == 0b001 for flag in flags):
-                async_start(self.send_trigger(trigger_ap_receive_progression), name="Sending AP-Receive-Progression")
-            if flags and all(flag == 0b010 for flag in flags):
-                async_start(self.send_trigger(trigger_ap_receive_useful), name="Sending AP-Receive-Useful")
-            if flags and all(flag == 0b100 for flag in flags):
-                async_start(self.send_trigger(trigger_ap_receive_trap), name="Sending AP-Receive-Trap")
-            if flags and all(flag == 0 for flag in flags):
-                async_start(self.send_trigger(trigger_ap_receive_filler), name="Sending AP-Receive-Filler")
+        if args.get("type", "") == "ItemSend":
+            # Receiving an item takes precedence over sending, so check that first
+            if self.slot_concerns_self(args["receiving"]):
+                # If we have a catch-all AP-receive, use that
+                if trigger_ap_receive in self.titsTriggers:
+                    async_start(self.send_trigger(trigger_ap_receive), name="Sending AP-Receive")
+                # Otherwise, send one for the specified classification
+                else:
+                    flags = [part["flags"] for part in args["data"] if "flags" in part]
+                    if flags:
+                        if all(flag & 0b001 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_receive_progression),
+                                        name="Sending AP-Receive-Progression")
+                        elif all(flag & 0b010 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_receive_useful), name="Sending AP-Receive-Useful")
+                        elif all(flag & 0b100 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_receive_trap), name="Sending AP-Receive-Trap")
+                        else:
+                            async_start(self.send_trigger(trigger_ap_receive_filler), name="Sending AP-Receive-Filler")
+            # Else if ensures we won't trigger a send if we already triggered a receive
+            elif self.slot_concerns_self(args["item"].player):
+                # If we have a catch-all AP-Send, use that
+                if trigger_ap_send in self.titsTriggers:
+                    async_start(self.send_trigger(trigger_ap_send), name="Sending AP-Send")
+                # Otherwise, send one for the specified classification
+                else:
+                    flags = [part["flags"] for part in args["data"] if "flags" in part]
+                    if flags:
+                        if all(flag & 0b001 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_send_progression),
+                                        name="Sending AP-Send-Progression")
+                        elif all(flag & 0b010 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_send_useful), name="Sending AP-Send-Useful")
+                        elif all(flag & 0b100 > 0 for flag in flags):
+                            async_start(self.send_trigger(trigger_ap_send_trap), name="Sending AP-Send-Trap")
+                        else:
+                            async_start(self.send_trigger(trigger_ap_send_filler), name="Sending AP-Send-Filler")
 
         # If we just goaled
         if args.get("type", "") == "Goal" and (
@@ -123,7 +161,6 @@ class TitsGameContext(CommonContext):
 
     def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
         super().on_deathlink(data)
-        logger.info("Deathlink trigger received!")
         # We want to send a deathlink trigger regardless of who died
         async_start(self.send_trigger(trigger_ap_deathlink), name="Sending AP-Deathlink")
 
@@ -132,9 +169,6 @@ class TitsGameContext(CommonContext):
             logger.info(f"T.I.T.S. is connected and listening on port {self.titsSocket.port}")
             for name, trigger_id in self.titsTriggers.items():
                 logger.info(f"Found Trigger {name}: {trigger_id}")
-        else:
-            logger.info(f"No active connection to T.I.T.S, ensure the program is running and API is enabled, "+
-                        "then run /tits_connect to attach")
 
     async def connect_to_api(self, port):
         try:
@@ -142,30 +176,38 @@ class TitsGameContext(CommonContext):
             logger.info(f"Connecting to TITS on port {self.titsPort} ")
             self.titsSocket = await websockets.connect(f"ws://localhost:{self.titsPort}/websocket",
                                                        max_size=self.max_size)
-            await self.get_trigger_list()
+            await self.get_trigger_list(True)
 
         except Exception as e:
             print(e)
             logger.info(f"Unable to connect. Ensure T.I.T.S. is running and API is enabled and on port {self.titsPort}")
             self.titsSocket = None
 
-    async def get_trigger_list(self):
+    async def get_trigger_list(self, print_result):
         if self.titsSocket is not None:
             await self.titsSocket.send(request_trigger_list(self.titsAlias))
             result = await self.titsSocket.recv()
             data = json.loads(result)
-            # logger.info(result)
+            if self.debug:
+                logger.info(result)
             for trigger in data["data"]["triggers"]:
-                logger.info("Found Trigger: " + trigger["name"])
+                if self.debug or print_result:
+                    logger.info("Found Trigger: " + trigger["name"])
                 self.titsTriggers[trigger["name"]] = trigger["ID"]
 
     async def send_trigger(self, trigger_name):
-        logger.debug(f"Sending T.I.T.S. Trigger {trigger_name}")
+        if self.debug:
+            logger.info(f"Sending T.I.T.S. Trigger {trigger_name}")
         if self.titsSocket is not None:
             if trigger_name in self.titsTriggers:
+                if self.debug:
+                    logger.info(
+                        "Sending Trigger " + str(activate_trigger(self.titsAlias, self.titsTriggers[trigger_name])))
                 await self.titsSocket.send(activate_trigger(self.titsAlias, self.titsTriggers[trigger_name]))
             else:
-                logger.debug(f"Skipping sending T.I.T.S. Trigger {trigger_name} since no endpoint was found")
+                if self.debug:
+                    logger.info(f"Skipping sending T.I.T.S. Trigger {trigger_name} since no endpoint was found")
+                await self.get_trigger_list(False)
 
     def make_gui(self):
         ui = super().make_gui()
