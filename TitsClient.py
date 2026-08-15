@@ -8,7 +8,6 @@ import json
 import websockets
 
 from CommonClient import CommonContext, gui_enabled, get_base_parser, server_loop, ClientCommandProcessor
-
 from Utils import async_start
 
 logger = logging.getLogger("Client")
@@ -71,6 +70,7 @@ class TitsCommandProcessor(ClientCommandProcessor):
     def _cmd_tits_debug(self):
         """Toggles Debug Information on or off."""
         self.ctx.debug = not self.ctx.debug
+        logger.info("Debug Status: "+str(self.ctx.debug))
 
 
 async def main(args):
@@ -108,6 +108,8 @@ class TitsGameContext(CommonContext):
     # The ID passed to the API. Only needs to change if you're controlling multiple TITS clients from the same window
     titsAlias = "AP Tits Client"
     debug = False
+    command_queue: typing.List[str] = []
+    processing_trigger: bool = False
 
     def __init__(self, server_address, password):
         super().__init__(server_address, password)
@@ -121,43 +123,48 @@ class TitsGameContext(CommonContext):
             if self.slot_concerns_self(args["receiving"]):
                 # If we have a catch-all AP-receive, use that
                 if trigger_ap_receive in self.titsTriggers:
-                    async_start(self.send_trigger(trigger_ap_receive), name="Sending AP-Receive")
+                    self.enqueue_trigger(trigger_ap_receive)
                 # Otherwise, send one for the specified classification
                 else:
                     flags = [part["flags"] for part in args["data"] if "flags" in part]
                     if flags:
                         if all(flag & 0b001 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_receive_progression),
-                                        name="Sending AP-Receive-Progression")
+                            self.enqueue_trigger(trigger_ap_receive_progression)
                         elif all(flag & 0b010 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_receive_useful), name="Sending AP-Receive-Useful")
+                            self.enqueue_trigger(trigger_ap_receive_useful)
                         elif all(flag & 0b100 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_receive_trap), name="Sending AP-Receive-Trap")
+                            self.enqueue_trigger(trigger_ap_receive_trap)
                         else:
-                            async_start(self.send_trigger(trigger_ap_receive_filler), name="Sending AP-Receive-Filler")
+                            self.enqueue_trigger(trigger_ap_receive_filler)
             # Else if ensures we won't trigger a send if we already triggered a receive
             elif self.slot_concerns_self(args["item"].player):
                 # If we have a catch-all AP-Send, use that
                 if trigger_ap_send in self.titsTriggers:
-                    async_start(self.send_trigger(trigger_ap_send), name="Sending AP-Send")
+                    self.enqueue_trigger(trigger_ap_send)
                 # Otherwise, send one for the specified classification
                 else:
                     flags = [part["flags"] for part in args["data"] if "flags" in part]
                     if flags:
                         if all(flag & 0b001 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_send_progression),
-                                        name="Sending AP-Send-Progression")
+                            self.enqueue_trigger(trigger_ap_send_progression)
                         elif all(flag & 0b010 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_send_useful), name="Sending AP-Send-Useful")
+                            self.enqueue_trigger(trigger_ap_send_useful)
                         elif all(flag & 0b100 > 0 for flag in flags):
-                            async_start(self.send_trigger(trigger_ap_send_trap), name="Sending AP-Send-Trap")
+                            self.enqueue_trigger(trigger_ap_send_trap)
                         else:
-                            async_start(self.send_trigger(trigger_ap_send_filler), name="Sending AP-Send-Filler")
+                            self.enqueue_trigger(trigger_ap_send_filler)
 
         # If we just goaled
         if args.get("type", "") == "Goal" and (
                 self.slot_concerns_self(args["team"]) or self.slot_concerns_self(args["slot"])):
-            async_start(self.send_trigger(trigger_ap_goal), name="Sending AP-Goal")
+            self.enqueue_trigger(trigger_ap_goal)
+
+    def enqueue_trigger(self, trigger: str):
+        if self.processing_trigger:
+            self.command_queue.append(trigger)
+        else:
+            async_start(self.send_trigger(trigger), name="Sending "+trigger)
+            self.processing_trigger = True
 
     def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
         super().on_deathlink(data)
@@ -208,6 +215,11 @@ class TitsGameContext(CommonContext):
                 if self.debug:
                     logger.info(f"Skipping sending T.I.T.S. Trigger {trigger_name} since no endpoint was found")
                 await self.get_trigger_list(False)
+        if len(self.command_queue) > 0:
+            trigger = self.command_queue.pop(0)
+            async_start(self.send_trigger(trigger), name="Sending " + trigger)
+        else:
+            self.processing_trigger = False
 
     def make_gui(self):
         ui = super().make_gui()
