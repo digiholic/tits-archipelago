@@ -197,10 +197,11 @@ class TitsGameContext(CommonContext):
             data = json.loads(result)
             if self.debug:
                 logger.info(result)
-            for trigger in data["data"]["triggers"]:
-                if self.debug or print_result:
-                    logger.info("Found Trigger: " + trigger["name"])
-                self.titsTriggers[trigger["name"]] = trigger["ID"]
+            if "data" in data and "triggers" in data["data"]:
+                for trigger in data["data"]["triggers"]:
+                    if self.debug or print_result:
+                        logger.info("Found Trigger: " + trigger["name"])
+                    self.titsTriggers[trigger["name"]] = trigger["ID"]
 
     async def send_trigger(self, trigger_name):
         if self.debug:
